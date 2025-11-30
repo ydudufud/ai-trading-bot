@@ -15,12 +15,12 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# ========== إعدادات التداول المتقدمة ==========
+# ========== إعدادات التداول المتقدمة مع الذكاء الاصطناعي ==========
 class TradingConfig:
     # المفاتيح - يمكن تغييرها من الواجهة
     BINANCE_API_KEY = os.getenv('BINANCE_API_KEY', '')
     BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET', '')
-    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')  # مفتاح الذكاء الاصطناعي
     
     # إعدادات التداول
     AUTO_EXECUTE = os.getenv('AUTO_EXECUTE', 'false').lower() == 'true'
@@ -28,12 +28,9 @@ class TradingConfig:
     QUOTE_ASSET = os.getenv('QUOTE_ASSET', 'USDT')
     TRADING_PAIRS = os.getenv('TRADING_PAIRS', 'BTC/USDT,ETH/USDT,ADA/USDT,BNB/USDT').split(',')
     
-    # المؤشرات الفنية
-    ENABLE_RSI = True
-    ENABLE_MACD = True
-    ENABLE_BOLLINGER = True
-    RSI_OVERBOUGHT = 70
-    RSI_OVERSOLD = 30
+    # إعدادات الذكاء الاصطناعي
+    AI_ENABLED = os.getenv('AI_ENABLED', 'true').lower() == 'true'
+    AI_MODEL = os.getenv('AI_MODEL', 'gpt-3.5-turbo')
 
 class AdvancedAITradingBot:
     def __init__(self):
@@ -80,6 +77,81 @@ class AdvancedAITradingBot:
         if len(self.user_commands) > 100:
             self.user_commands.pop()
 
+    # ========== الذكاء الاصطناعي المتقدم ==========
+    def get_ai_analysis(self, symbol, technical_data):
+        """الحصول على تحليل الذكاء الاصطناعي للسوق"""
+        if not self.config.OPENAI_API_KEY or not self.config.AI_ENABLED:
+            return "🤖 الذكاء الاصطناعي غير مفعل - أضف مفتاح OpenAI API في الإعدادات"
+        
+        try:
+            prompt = f"""
+            أنا مساعد تداول ذكي. قم بتحليل العملة {symbol} بناء على البيانات الفنية التالية:
+            
+            البيانات الفنية:
+            - السعر الحالي: ${technical_data['price']:.2f}
+            - RSI: {technical_data['rsi']} ({'مشترى زائد' if technical_data['rsi'] > 70 else 'مباع زائد' if technical_data['rsi'] < 30 else 'محايد'})
+            - MACD: {technical_data['macd']:.4f}
+            - موضع البولينجر: {technical_data['bb_position']}
+            - نسبة الحجم: {technical_data['volume_ratio']:.2f}x
+            - الاتجاه: {technical_data['trend']}
+            - قوة الإشارة: {technical_data['signal_strength']}/4
+            
+            التحليل الحالي:
+            - الإشارة: {technical_data['signal']}
+            - الثقة: {technical_data['confidence']}
+            
+            قدم تحليلاً شاملاً باللغة العربية يتضمن:
+            1. تقييم عام للسوق
+            2. المخاطر المحتملة
+            3. التوصية النهائية (شراء/بيع/انتظار)
+            4- السبب وراء التوصية
+            
+            كن دقيقاً واحترافياً في التحليل.
+            """
+            
+            headers = {
+                "Authorization": f"Bearer {self.config.OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            data = {
+                "model": self.config.AI_MODEL,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "أنت خبير تداول محترف في الأسواق المالية. قدم تحليلات دقيقة وواقعية بناء على البيانات الفنية."
+                    },
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
+                ],
+                "max_tokens": 500,
+                "temperature": 0.7
+            }
+            
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                ai_analysis = result['choices'][0]['message']['content'].strip()
+                self.log(f"🤖 الذكاء الاصطناعي حلل {symbol}", "AI")
+                return ai_analysis
+            else:
+                error_msg = f"❌ خطأ في الذكاء الاصطناعي: {response.status_code}"
+                self.log(error_msg, "ERROR")
+                return error_msg
+                
+        except Exception as e:
+            error_msg = f"❌ خطأ في اتصال الذكاء الاصطناعي: {str(e)}"
+            self.log(error_msg, "ERROR")
+            return error_msg
+
     # ========== المؤشرات الفنية المتقدمة ==========
     def calculate_advanced_indicators(self, df):
         """حساب جميع المؤشرات الفنية المتقدمة"""
@@ -116,17 +188,24 @@ class AdvancedAITradingBot:
             
             # إشارات التداول المخصصة
             df['buy_signal'] = (
-                (df['rsi_14'] < self.config.RSI_OVERSOLD) &
+                (df['rsi_14'] < 35) &
                 (df['macd'] > df['macd_signal']) &
                 (df['close'] < df['bb_lower']) &
                 (df['volume_ratio'] > 1.2)
             )
             
             df['sell_signal'] = (
-                (df['rsi_14'] > self.config.RSI_OVERBOUGHT) |
+                (df['rsi_14'] > 65) |
                 (df['macd'] < df['macd_signal']) |
                 (df['close'] > df['bb_upper'])
             )
+            
+            # قوة الإشارة
+            df['signal_strength'] = 0
+            df.loc[df['buy_signal'], 'signal_strength'] += 1
+            df.loc[df['rsi_14'] < 30, 'signal_strength'] += 1
+            df.loc[df['macd'] > df['macd_signal'], 'signal_strength'] += 1
+            df.loc[df['close'] < df['bb_lower'], 'signal_strength'] += 1
             
             return df
             
@@ -135,7 +214,7 @@ class AdvancedAITradingBot:
             return df
 
     def analyze_market(self, symbol='BTC/USDT'):
-        """تحليل السوق المتقدم"""
+        """تحليل السوق المتقدم مع الذكاء الاصطناعي"""
         try:
             # جلب بيانات OHLCV
             ohlcv = self.exchange.fetch_ohlcv(symbol, '1h', limit=100)
@@ -155,8 +234,10 @@ class AdvancedAITradingBot:
                 'bb_position': 'وسط',
                 'volume_ratio': round(latest['volume_ratio'], 2),
                 'trend': 'صاعد' if latest['sma_20'] > latest['sma_50'] else 'هابط',
+                'signal_strength': int(latest['signal_strength']),
                 'signal': 'محايد',
-                'confidence': 'منخفضة'
+                'confidence': 'منخفضة',
+                'ai_analysis': ''
             }
             
             # تحديد موقع السعر في Bollinger Bands
@@ -166,22 +247,16 @@ class AdvancedAITradingBot:
                 analysis['bb_position'] = 'أعلى'
             
             # حساب الإشارة
-            buy_signals = 0
-            if analysis['rsi'] < 35:
-                buy_signals += 1
-            if analysis['macd'] > 0:
-                buy_signals += 1
-            if analysis['bb_position'] == 'أسفل':
-                buy_signals += 1
-            if analysis['volume_ratio'] > 1.5:
-                buy_signals += 1
-            
-            if buy_signals >= 3:
+            if analysis['signal_strength'] >= 3:
                 analysis['signal'] = 'شراء'
                 analysis['confidence'] = 'عالية'
-            elif buy_signals >= 2:
-                analysis['signal'] = 'شراء'
+            elif analysis['signal_strength'] >= 2:
+                analysis['signal'] = 'شراء' 
                 analysis['confidence'] = 'متوسطة'
+            
+            # الحصول على تحليل الذكاء الاصطناعي
+            if self.config.AI_ENABLED and self.config.OPENAI_API_KEY:
+                analysis['ai_analysis'] = self.get_ai_analysis(symbol, analysis)
             
             return analysis
             
@@ -199,20 +274,15 @@ class AdvancedAITradingBot:
             if 'ابحث عن' in command or 'تحليل' in command:
                 symbols = {
                     'btc': 'BTC/USDT', 'eth': 'ETH/USDT', 'ada': 'ADA/USDT',
-                    'bnb': 'BNB/USDT', 'xrp': 'XRP/USDT', 'dot': 'DOT/USDT'
+                    'bnb': 'BNB/USDT', 'xrp': 'XRP/USDT', 'dot': 'DOT/USDT',
+                    'sol': 'SOL/USDT', 'matic': 'MATIC/USDT', 'link': 'LINK/USDT'
                 }
                 
                 for name, symbol in symbols.items():
                     if name in command:
                         analysis = self.analyze_market(symbol)
                         if analysis:
-                            response = (f"📊 تحليل {symbol}:\n"
-                                      f"💰 السعر: ${analysis['price']:.2f}\n"
-                                      f"📈 RSI: {analysis['rsi']}\n"
-                                      f"📊 MACD: {analysis['macd']:.4f}\n"
-                                      f"🎯 الإشارة: {analysis['signal']}\n"
-                                      f"💪 الثقة: {analysis['confidence']}\n"
-                                      f"📊 الاتجاه: {analysis['trend']}")
+                            response = self.format_analysis_response(analysis)
                         else:
                             response = f"❌ لا يمكن تحليل {symbol}"
                         break
@@ -239,17 +309,28 @@ class AdvancedAITradingBot:
             
             elif 'الحالة' in command:
                 status = "🟢 شغال" if self.is_running else "⏸️ متوقف"
-                response = f"حالة التداول: {status}"
+                ai_status = "🟢 مفعل" if self.config.AI_ENABLED and self.config.OPENAI_API_KEY else "⭕ معطل"
+                response = f"حالة التداول: {status}\nحالة الذكاء الاصطناعي: {ai_status}"
+            
+            elif 'تفعيل الذكاء' in command:
+                self.config.AI_ENABLED = True
+                response = "✅ تم تفعيل الذكاء الاصطناعي"
+            
+            elif 'تعطيل الذكاء' in command:
+                self.config.AI_ENABLED = False
+                response = "⭕ تم تعطيل الذكاء الاصطناعي"
             
             elif 'المساعدة' in command or 'help' in command:
                 response = """
 🤖 **الأوامر المتاحة:**
-- `ابحث عن BTC` - تحليل البيتكوين
-- `تحليل ETH` - تحليل الإيثيريوم  
+- `ابحث عن BTC` - تحليل البيتكوين بالذكاء الاصطناعي
+- `تحليل ETH` - تحليل الإيثيريوم بالذكاء الاصطناعي  
 - `شغل التداول` - بدء التداول التلقائي
 - `اوقف التداول` - إيقاف التداول
 - `الرصيد` - عرض الرصيد
-- `الحالة` - عرض حالة التداول
+- `الحالة` - عرض حالة التداول والذكاء الاصطناعي
+- `تفعيل الذكاء` - تفعيل الذكاء الاصطناعي
+- `تعطيل الذكاء` - تعطيل الذكاء الاصطناعي
 - `المساعدة` - عرض هذه الرسالة
                 """
             else:
@@ -262,6 +343,27 @@ class AdvancedAITradingBot:
             error_msg = f"❌ خطأ في معالجة الأمر: {str(e)}"
             self.log(error_msg, "ERROR")
             return error_msg
+
+    def format_analysis_response(self, analysis):
+        """تنسيق استجابة التحليل مع الذكاء الاصطناعي"""
+        response = f"""
+📊 **تحليل {analysis['symbol']}**
+
+💰 **السعر:** ${analysis['price']:.2f}
+📈 **RSI:** {analysis['rsi']}
+📊 **MACD:** {analysis['macd']:.4f}
+🎯 **الإشارة:** {analysis['signal']}
+💪 **الثقة:** {analysis['confidence']}
+📊 **الاتجاه:** {analysis['trend']}
+💪 **قوة الإشارة:** {analysis['signal_strength']}/4
+
+"""
+        if analysis['ai_analysis'] and not analysis['ai_analysis'].startswith('❌'):
+            response += f"🤖 **تحليل الذكاء الاصطناعي:**\n{analysis['ai_analysis']}"
+        else:
+            response += "🤖 *الذكاء الاصطناعي غير متوفر*"
+        
+        return response
 
     # ========== نظام التداول التلقائي ==========
     def trading_loop(self):
@@ -278,7 +380,7 @@ class AdvancedAITradingBot:
                     if analysis and analysis['signal'] == 'شراء' and analysis['confidence'] == 'عالية':
                         self.execute_trade_signal(symbol, analysis)
                     
-                    time.sleep(2)  # احترام rate limits
+                    time.sleep(2)
                 
                 # انتظار 5 دقائق بين كل دورة
                 self.log("🔍 جولة الفحص اكتملت، انتظار 5 دقائق...", "SYSTEM")
@@ -356,7 +458,7 @@ class AdvancedAITradingBot:
             for key, value in new_config.items():
                 if hasattr(self.config, key):
                     # تحويل القيم إلى الأنواع المناسبة
-                    if key in ['AUTO_EXECUTE']:
+                    if key in ['AUTO_EXECUTE', 'AI_ENABLED']:
                         value = value.lower() == 'true'
                     elif key in ['RISK_PERCENTAGE']:
                         value = float(value)
@@ -416,6 +518,7 @@ HTML_TEMPLATE = '''
         }
         .btn-danger { background: #ff4444; }
         .btn-success { background: #00c853; }
+        .btn-ai { background: #9c27b0; }
         .form-group { margin: 10px 0; }
         input, select { 
             width: 100%; 
@@ -444,6 +547,13 @@ HTML_TEMPLATE = '''
             margin-top: 10px; 
             white-space: pre-line; 
         }
+        .ai-analysis {
+            background: #2d1b69;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+            border-left: 4px solid #9c27b0;
+        }
     </style>
 </head>
 <body>
@@ -456,12 +566,14 @@ HTML_TEMPLATE = '''
             <button class="btn btn-success" onclick="startTrading()">▶️ بدء التداول</button>
             <button class="btn btn-danger" onclick="stopTrading()">⏹️ إيقاف التداول</button>
             <button class="btn" onclick="getBalance()">💰 الرصيد</button>
+            <button class="btn btn-ai" onclick="toggleAI()">🤖 تفعيل/تعطيل الذكاء</button>
             <span id="status" class="status-stopped">⏸️ متوقف</span>
+            <span id="aiStatus" style="margin-left: 20px;">🤖 الذكاء: ⭕ معطل</span>
         </div>
 
         <!-- بطاقة الأوامر الصوتية -->
         <div class="card">
-            <h3>🎤 الأوامر الصوتية/النصية</h3>
+            <h3>🎤 الأوامر الذكية</h3>
             <input type="text" id="commandInput" placeholder="اكتب أمر مثل: 'ابحث عن BTC' أو 'شغل التداول'">
             <button class="btn" onclick="sendCommand()">🚀 تنفيذ الأمر</button>
             <div id="commandResult" class="command-result"></div>
@@ -473,6 +585,7 @@ HTML_TEMPLATE = '''
             <button class="btn" onclick="analyzeMarket('BTC/USDT')">تحليل BTC</button>
             <button class="btn" onclick="analyzeMarket('ETH/USDT')">تحليل ETH</button>
             <button class="btn" onclick="analyzeMarket('ADA/USDT')">تحليل ADA</button>
+            <button class="btn" onclick="analyzeMarket('BNB/USDT')">تحليل BNB</button>
             <div id="analysisResult" style="margin-top: 10px;"></div>
         </div>
 
@@ -487,6 +600,17 @@ HTML_TEMPLATE = '''
                 <div class="form-group">
                     <label>الرمز السري للباينانس:</label>
                     <input type="password" name="BINANCE_API_SECRET" value="{{ config.BINANCE_API_SECRET }}" placeholder="أدخل الرمز السري">
+                </div>
+                <div class="form-group">
+                    <label>مفتاح OpenAI API:</label>
+                    <input type="password" name="OPENAI_API_KEY" value="{{ config.OPENAI_API_KEY }}" placeholder="أدخل مفتاح الذكاء الاصطناعي">
+                </div>
+                <div class="form-group">
+                    <label>تفعيل الذكاء الاصطناعي:</label>
+                    <select name="AI_ENABLED">
+                        <option value="true" {% if config.AI_ENABLED %}selected{% endif %}>مفعل</option>
+                        <option value="false" {% if not config.AI_ENABLED %}selected{% endif %}>معطل</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label>نسبة المخاطرة %:</label>
@@ -526,6 +650,10 @@ HTML_TEMPLATE = '''
                 const statusEl = document.getElementById('status');
                 statusEl.className = data.running ? 'status-running' : 'status-stopped';
                 statusEl.textContent = data.running ? '🟢 شغال' : '⏸️ متوقف';
+                
+                const aiStatusEl = document.getElementById('aiStatus');
+                aiStatusEl.textContent = data.ai_enabled ? '🤖 الذكاء: 🟢 مفعل' : '🤖 الذكاء: ⭕ معطل';
+                aiStatusEl.style.color = data.ai_enabled ? '#00ff00' : '#ff4444';
             });
         }
 
@@ -539,6 +667,13 @@ HTML_TEMPLATE = '''
 
         function stopTrading() {
             fetch('/stop', {method: 'POST'}).then(r => r.json()).then(data => {
+                alert(data.message);
+                updateStatus();
+            });
+        }
+
+        function toggleAI() {
+            fetch('/toggle_ai', {method: 'POST'}).then(r => r.json()).then(data => {
                 alert(data.message);
                 updateStatus();
             });
@@ -558,7 +693,7 @@ HTML_TEMPLATE = '''
             });
         }
 
-        // الأوامر الصوتية/النصية
+        // الأوامر الذكية
         function sendCommand() {
             const command = document.getElementById('commandInput').value;
             if (!command.trim()) return;
@@ -582,17 +717,28 @@ HTML_TEMPLATE = '''
                     if (data.error) {
                         resultEl.innerHTML = `<div style="color: #ff4444">${data.error}</div>`;
                     } else {
-                        resultEl.innerHTML = `
-                            <div style="background: #2a2e35; padding: 15px; border-radius: 8px;">
-                                <strong>${data.symbol}</strong><br>
-                                السعر: $${data.price.toFixed(2)}<br>
-                                RSI: ${data.rsi}<br>
-                                الإشارة: ${data.signal}<br>
-                                الثقة: ${data.confidence}
-                            </div>
-                        `;
+                        resultEl.innerHTML = formatAnalysis(data);
                     }
                 });
+        }
+
+        function formatAnalysis(analysis) {
+            let html = `
+                <div style="background: #2a2e35; padding: 15px; border-radius: 8px; margin-bottom: 10px;">
+                    <strong>${analysis.symbol}</strong><br>
+                    السعر: $${analysis.price.toFixed(2)}<br>
+                    RSI: ${analysis.rsi}<br>
+                    الإشارة: ${analysis.signal}<br>
+                    الثقة: ${analysis.confidence}<br>
+                    قوة الإشارة: ${analysis.signal_strength}/4
+                </div>
+            `;
+            
+            if (analysis.ai_analysis && !analysis.ai_analysis.includes('❌')) {
+                html += `<div class="ai-analysis">🤖 <strong>تحليل الذكاء الاصطناعي:</strong><br>${analysis.ai_analysis.replace(/\\n/g, '<br>')}</div>`;
+            }
+            
+            return html;
         }
 
         // إرسال الإعدادات
@@ -652,7 +798,10 @@ def home():
 
 @app.route('/status')
 def status():
-    return jsonify({"running": trading_bot.is_running})
+    return jsonify({
+        "running": trading_bot.is_running,
+        "ai_enabled": trading_bot.config.AI_ENABLED and bool(trading_bot.config.OPENAI_API_KEY)
+    })
 
 @app.route('/start', methods=['POST'])
 def start_trading():
@@ -664,6 +813,12 @@ def start_trading():
 def stop_trading():
     trading_bot.stop_trading()
     return jsonify({"message": "تم إيقاف التداول التلقائي"})
+
+@app.route('/toggle_ai', methods=['POST'])
+def toggle_ai():
+    trading_bot.config.AI_ENABLED = not trading_bot.config.AI_ENABLED
+    status = "مفعل" if trading_bot.config.AI_ENABLED else "معطل"
+    return jsonify({"message": f"تم {status} الذكاء الاصطناعي"})
 
 @app.route('/balance')
 def balance():
@@ -685,4 +840,33 @@ def analyze_symbol(symbol):
 def update_config():
     data = request.get_json()
     if trading_bot.update_config(data):
-        return jsonify({"message": "تم تحديث
+        return jsonify({"message": "تم تحديث الإعدادات بنجاح"})
+    return jsonify({"message": "فشل تحديث الإعدادات"})
+
+@app.route('/logs')
+def get_logs():
+    return jsonify({"logs": trading_bot.user_commands[:50]})
+
+@app.route('/clear_logs', methods=['POST'])
+def clear_logs():
+    trading_bot.user_commands.clear()
+    return jsonify({"message": "تم مسح السجلات"})
+
+@app.route('/health')
+def health():
+    return jsonify({
+        "status": "healthy", 
+        "timestamp": datetime.now().isoformat(),
+        "version": "4.0",
+        "features": [
+            "التداول الآلي 24/7",
+            "الذكاء الاصطناعي المتقدم", 
+            "المؤشرات الفنية المتقدمة",
+            "نظام الأوامر الذكية",
+            "واجهة ويب متكاملة"
+        ]
+    })
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
