@@ -2,6 +2,7 @@ import os
 import time
 import json
 import threading
+import requests
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 import ccxt
@@ -14,83 +15,83 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# إعدادات التداول القابلة للتخصيص
+# ========== إعدادات التداول المتقدمة ==========
 class TradingConfig:
+    # المفاتيح - يمكن تغييرها من الواجهة
     BINANCE_API_KEY = os.getenv('BINANCE_API_KEY', '')
     BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET', '')
-    AI_API_KEY = os.getenv('AI_API_KEY', '')
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+    
+    # إعدادات التداول
     AUTO_EXECUTE = os.getenv('AUTO_EXECUTE', 'false').lower() == 'true'
-    RISK_PCT = float(os.getenv('RISK_PCT', '0.01'))
-    QUOTE_ASSET = 'USDT'
+    RISK_PERCENTAGE = float(os.getenv('RISK_PERCENTAGE', '1.0'))
+    QUOTE_ASSET = os.getenv('QUOTE_ASSET', 'USDT')
+    TRADING_PAIRS = os.getenv('TRADING_PAIRS', 'BTC/USDT,ETH/USDT,ADA/USDT,BNB/USDT').split(',')
+    
+    # المؤشرات الفنية
+    ENABLE_RSI = True
+    ENABLE_MACD = True
+    ENABLE_BOLLINGER = True
+    RSI_OVERBOUGHT = 70
+    RSI_OVERSOLD = 30
 
-class AITradingBot:
+class AdvancedAITradingBot:
     def __init__(self):
         self.config = TradingConfig()
         self.exchange = None
         self.is_running = False
         self.trading_thread = None
         self.user_commands = []
+        self.trading_history = []
         self.setup_exchange()
         
     def setup_exchange(self):
-        """تهيئة اتصال باينانس"""
+        """تهيئة اتصال البورصة"""
         try:
             if self.config.BINANCE_API_KEY and self.config.BINANCE_API_SECRET:
                 self.exchange = ccxt.binance({
                     'apiKey': self.config.BINANCE_API_KEY,
                     'secret': self.config.BINANCE_API_SECRET,
                     'enableRateLimit': True,
-                    'options': {'defaultType': 'spot'}
+                    'options': {
+                        'defaultType': 'spot',
+                        'adjustForTimeDifference': True
+                    }
                 })
+                # اختبار الاتصال
                 self.exchange.fetch_balance()
                 self.log("✅ تم الاتصال بباينانس بنجاح")
                 return True
             else:
-                self.log("❌ مفاتيح باينانس غير موجودة - وضع المحاكاة")
+                self.log("⚠️  مفاتيح باينانس غير موجودة - وضع المحاكاة")
                 return False
         except Exception as e:
-            self.log(f"❌ فشل الاتصال بباينانس: {e}")
+            self.log(f"❌ فشل الاتصال بباينانس: {str(e)}")
             return False
-    
-    def log(self, message):
-        """تسجيل الرسائل"""
+
+    def log(self, message, level="INFO"):
+        """تسجيل الرسائل مع الطابع الزمني"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_message = f"[{timestamp}] {message}"
-        print(log_message)
-        self.user_commands.insert(0, log_message)
+        log_entry = f"[{timestamp}] {level}: {message}"
+        print(log_entry)
+        
+        # حفظ آخر 100 رسالة للعرض في الواجهة
+        self.user_commands.insert(0, log_entry)
         if len(self.user_commands) > 100:
             self.user_commands.pop()
-    
-    def fetch_symbols(self):
-        """جلب قائمة العملات"""
-        try:
-            markets = self.exchange.load_markets()
-            symbols = [s for s in markets if s.endswith(f"/{self.config.QUOTE_ASSET}")]
-            return symbols[:20]
-        except Exception as e:
-            self.log(f"❌ خطأ في جلب الرموز: {e}")
-            return []
-    
-    def fetch_ohlcv(self, symbol, timeframe="1h", limit=100):
-        """جلب بيانات التداول"""
-        try:
-            data = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-            df = pd.DataFrame(data, columns=['timestamp','open','high','low','close','volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            return df
-        except Exception as e:
-            self.log(f"❌ خطأ في جلب بيانات {symbol}: {e}")
-            return pd.DataFrame()
-    
-    def calculate_indicators(self, df):
-        """حساب المؤشرات الفنية"""
+
+    # ========== المؤشرات الفنية المتقدمة ==========
+    def calculate_advanced_indicators(self, df):
+        """حساب جميع المؤشرات الفنية المتقدمة"""
         try:
             # المتوسطات المتحركة
-            df['ema20'] = ta.trend.ema_indicator(df['close'], window=20)
-            df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
+            df['sma_20'] = ta.trend.sma_indicator(df['close'], window=20)
+            df['sma_50'] = ta.trend.sma_indicator(df['close'], window=50)
+            df['ema_12'] = ta.trend.ema_indicator(df['close'], window=12)
+            df['ema_26'] = ta.trend.ema_indicator(df['close'], window=26)
             
             # RSI
-            df['rsi'] = ta.momentum.rsi(df['close'], window=14)
+            df['rsi_14'] = ta.momentum.rsi(df['close'], window=14)
             
             # MACD
             macd = ta.trend.MACD(df['close'])
@@ -99,90 +100,128 @@ class AITradingBot:
             df['macd_histogram'] = macd.macd_diff()
             
             # Bollinger Bands
-            df['bb_upper'] = ta.volatility.bollinger_hband(df['close'])
-            df['bb_lower'] = ta.volatility.bollinger_lband(df['close'])
-            df['bb_middle'] = ta.volatility.bollinger_mavg(df['close'])
+            bollinger = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
+            df['bb_upper'] = bollinger.bollinger_hband()
+            df['bb_lower'] = bollinger.bollinger_lband()
+            df['bb_middle'] = bollinger.bollinger_mavg()
             
-            # Volume SMA
-            df['volume_sma'] = df['volume'].rolling(20).mean()
+            # Stochastic
+            stoch = ta.momentum.StochasticOscillator(df['high'], df['low'], df['close'])
+            df['stoch_k'] = stoch.stoch()
+            df['stoch_d'] = stoch.stoch_signal()
+            
+            # Volume indicators
+            df['volume_sma'] = ta.volume.volume_sma(df['volume'], window=20)
+            df['volume_ratio'] = df['volume'] / df['volume_sma']
+            
+            # إشارات التداول المخصصة
+            df['buy_signal'] = (
+                (df['rsi_14'] < self.config.RSI_OVERSOLD) &
+                (df['macd'] > df['macd_signal']) &
+                (df['close'] < df['bb_lower']) &
+                (df['volume_ratio'] > 1.2)
+            )
+            
+            df['sell_signal'] = (
+                (df['rsi_14'] > self.config.RSI_OVERBOUGHT) |
+                (df['macd'] < df['macd_signal']) |
+                (df['close'] > df['bb_upper'])
+            )
             
             return df
+            
         except Exception as e:
-            self.log(f"❌ خطأ في حساب المؤشرات: {e}")
+            self.log(f"❌ خطأ في حساب المؤشرات: {str(e)}", "ERROR")
             return df
-    
-    def analyze_symbol(self, symbol):
-        """تحليل عملة واحدة"""
+
+    def analyze_market(self, symbol='BTC/USDT'):
+        """تحليل السوق المتقدم"""
         try:
-            df = self.fetch_ohlcv(symbol, "1h", 100)
-            if df.empty:
-                return None
+            # جلب بيانات OHLCV
+            ohlcv = self.exchange.fetch_ohlcv(symbol, '1h', limit=100)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            df = self.calculate_indicators(df)
-            last = df.iloc[-1]
+            # حساب المؤشرات
+            df = self.calculate_advanced_indicators(df)
             
+            # التحليل النهائي
+            latest = df.iloc[-1]
             analysis = {
                 'symbol': symbol,
-                'price': float(last['close']),
-                'volume': float(last['volume']),
-                'ema20': float(last['ema20']) if not np.isnan(last['ema20']) else 0,
-                'ema50': float(last['ema50']) if not np.isnan(last['ema50']) else 0,
-                'rsi': float(last['rsi']) if not np.isnan(last['rsi']) else 50,
-                'macd': float(last['macd']) if not np.isnan(last['macd']) else 0,
-                'signal': 'hold',
-                'confidence': 'medium'
+                'price': latest['close'],
+                'rsi': round(latest['rsi_14'], 2),
+                'macd': round(latest['macd'], 4),
+                'bb_position': 'وسط',
+                'volume_ratio': round(latest['volume_ratio'], 2),
+                'trend': 'صاعد' if latest['sma_20'] > latest['sma_50'] else 'هابط',
+                'signal': 'محايد',
+                'confidence': 'منخفضة'
             }
             
-            # إشارات تداول متقدمة
+            # تحديد موقع السعر في Bollinger Bands
+            if latest['close'] < latest['bb_lower']:
+                analysis['bb_position'] = 'أسفل'
+            elif latest['close'] > latest['bb_upper']:
+                analysis['bb_position'] = 'أعلى'
+            
+            # حساب الإشارة
             buy_signals = 0
-            if analysis['ema20'] > analysis['ema50']:
-                buy_signals += 1
-            if 30 < analysis['rsi'] < 70:
+            if analysis['rsi'] < 35:
                 buy_signals += 1
             if analysis['macd'] > 0:
                 buy_signals += 1
+            if analysis['bb_position'] == 'أسفل':
+                buy_signals += 1
+            if analysis['volume_ratio'] > 1.5:
+                buy_signals += 1
             
-            if buy_signals >= 2:
-                analysis['signal'] = 'buy'
-                analysis['confidence'] = 'high' if buy_signals == 3 else 'medium'
+            if buy_signals >= 3:
+                analysis['signal'] = 'شراء'
+                analysis['confidence'] = 'عالية'
+            elif buy_signals >= 2:
+                analysis['signal'] = 'شراء'
+                analysis['confidence'] = 'متوسطة'
             
             return analysis
             
         except Exception as e:
-            self.log(f"❌ خطأ في تحليل {symbol}: {e}")
+            self.log(f"❌ خطأ في تحليل {symbol}: {str(e)}", "ERROR")
             return None
 
+    # ========== نظام الأوامر الصوتية/النصية ==========
     def process_command(self, command):
         """معالجة الأوامر من المستخدم"""
         try:
             command = command.lower().strip()
-            self.log(f"🎯 أمر مستلم: {command}")
+            self.log(f"🎯 أمر مستلم: {command}", "COMMAND")
             
             if 'ابحث عن' in command or 'تحليل' in command:
-                # استخراج اسم العملة من الأمر
-                symbols = ['btc', 'eth', 'ada', 'dot', 'link', 'bnb', 'xrp']
-                symbol_found = None
-                for s in symbols:
-                    if s in command:
-                        symbol_found = f"{s.upper()}/USDT"
-                        break
+                symbols = {
+                    'btc': 'BTC/USDT', 'eth': 'ETH/USDT', 'ada': 'ADA/USDT',
+                    'bnb': 'BNB/USDT', 'xrp': 'XRP/USDT', 'dot': 'DOT/USDT'
+                }
                 
-                if symbol_found:
-                    analysis = self.analyze_symbol(symbol_found)
-                    if analysis:
-                        response = (f"📊 تحليل {symbol_found}:\n"
-                                  f"💰 السعر: ${analysis['price']:.2f}\n"
-                                  f"📈 RSI: {analysis['rsi']:.1f}\n"
-                                  f"🎯 الإشارة: {analysis['signal']}\n"
-                                  f"💪 الثقة: {analysis['confidence']}")
-                    else:
-                        response = f"❌ لا يمكن تحليل {symbol_found}"
+                for name, symbol in symbols.items():
+                    if name in command:
+                        analysis = self.analyze_market(symbol)
+                        if analysis:
+                            response = (f"📊 تحليل {symbol}:\n"
+                                      f"💰 السعر: ${analysis['price']:.2f}\n"
+                                      f"📈 RSI: {analysis['rsi']}\n"
+                                      f"📊 MACD: {analysis['macd']:.4f}\n"
+                                      f"🎯 الإشارة: {analysis['signal']}\n"
+                                      f"💪 الثقة: {analysis['confidence']}\n"
+                                      f"📊 الاتجاه: {analysis['trend']}")
+                        else:
+                            response = f"❌ لا يمكن تحليل {symbol}"
+                        break
                 else:
-                    response = "⚠️ الرجاء تحديد العملة (مثال: 'ابحث عن BTC')"
+                    response = "⚠️ الرجاء تحديد العملة (مثال: 'ابحث عن BTC' أو 'تحليل ETH')"
             
             elif 'شغل التداول' in command or 'ابدأ' in command:
                 if self.start_trading():
-                    response = "✅ تم بدء التداول التلقائي"
+                    response = "✅ تم بدء التداول التلقائي على السحابة"
                 else:
                     response = "⚠️ التداول مشغّل مسبقاً"
             
@@ -192,96 +231,124 @@ class AITradingBot:
             
             elif 'الرصيد' in command:
                 balance = self.get_balance()
-                response = f"💰 الرصيد: {json.dumps(balance, ensure_ascii=False)}"
+                if balance:
+                    balance_str = "\n".join([f"{asset}: {amount:.8f}" for asset, amount in balance.items()])
+                    response = f"💰 الرصيد:\n{balance_str}"
+                else:
+                    response = "❌ لا يمكن جلب الرصيد"
             
-            elif 'السجلات' in command:
-                response = "📝 استخدم واجهة الويب لمشاهدة السجلات الكاملة"
+            elif 'الحالة' in command:
+                status = "🟢 شغال" if self.is_running else "⏸️ متوقف"
+                response = f"حالة التداول: {status}"
             
+            elif 'المساعدة' in command or 'help' in command:
+                response = """
+🤖 **الأوامر المتاحة:**
+- `ابحث عن BTC` - تحليل البيتكوين
+- `تحليل ETH` - تحليل الإيثيريوم  
+- `شغل التداول` - بدء التداول التلقائي
+- `اوقف التداول` - إيقاف التداول
+- `الرصيد` - عرض الرصيد
+- `الحالة` - عرض حالة التداول
+- `المساعدة` - عرض هذه الرسالة
+                """
             else:
-                response = "🤖 لم أفهم الأمر. جرب: 'ابحث عن BTC' أو 'شغل التداول' أو 'الرصيد'"
+                response = "🤖 لم أفهم الأمر. جرب: 'المساعدة' لرؤية الأوامر المتاحة"
             
-            self.log(f"🤖 رد: {response}")
+            self.log(f"🤖 رد: {response}", "RESPONSE")
             return response
                 
         except Exception as e:
             error_msg = f"❌ خطأ في معالجة الأمر: {str(e)}"
-            self.log(error_msg)
+            self.log(error_msg, "ERROR")
             return error_msg
-    
-    def execute_trade(self, symbol, action, quantity):
-        """تنفيذ صفقة"""
-        if not self.config.AUTO_EXECUTE:
-            self.log(f"💡 [محاكاة] {action.upper()} {symbol} الكمية: {quantity:.6f}")
-            return {"status": "dry_run"}
-        
-        try:
-            order = self.exchange.create_order(symbol, 'market', action, quantity)
-            self.log(f"✅ تم تنفيذ أمر {action} لـ {symbol}")
-            return {"status": "success", "order": order}
-        except Exception as e:
-            self.log(f"❌ خطأ في تنفيذ الأمر: {e}")
-            return {"status": "error", "message": str(e)}
-    
-    def get_balance(self):
-        """جلب الرصيد"""
-        try:
-            if self.exchange:
-                balance = self.exchange.fetch_balance()
-                return {k: v for k, v in balance['total'].items() if v > 0}
-            return {}
-        except Exception as e:
-            self.log(f"❌ خطأ في جلب الرصيد: {e}")
-            return {}
-    
+
+    # ========== نظام التداول التلقائي ==========
     def trading_loop(self):
-        """الحلقة الرئيسية للتداول"""
-        self.log("🚀 بدء التداول التلقائي على السحابة...")
+        """الحلقة الرئيسية للتداول التلقائي"""
+        self.log("🚀 بدء التداول التلقائي على السحابة...", "SYSTEM")
         
         while self.is_running:
             try:
-                symbols = self.fetch_symbols()
-                self.log(f"🔍 فحص {len(symbols)} عملة...")
-                
-                for symbol in symbols:
+                for symbol in self.config.TRADING_PAIRS:
                     if not self.is_running:
                         break
                     
-                    analysis = self.analyze_symbol(symbol)
-                    if analysis and analysis['signal'] == 'buy' and analysis['confidence'] == 'high':
-                        # حساب الكمية (نسبة المخاطرة)
-                        balance = self.get_balance()
-                        usdt_balance = balance.get('USDT', 0)
-                        
-                        if usdt_balance > 10:
-                            quantity = (usdt_balance * self.config.RISK_PCT) / analysis['price']
-                            self.execute_trade(symbol, "buy", quantity)
+                    analysis = self.analyze_market(symbol)
+                    if analysis and analysis['signal'] == 'شراء' and analysis['confidence'] == 'عالية':
+                        self.execute_trade_signal(symbol, analysis)
                     
-                    time.sleep(1)
+                    time.sleep(2)  # احترام rate limits
                 
-                # انتظار 5 دقائق بين كل مسح
+                # انتظار 5 دقائق بين كل دورة
+                self.log("🔍 جولة الفحص اكتملت، انتظار 5 دقائق...", "SYSTEM")
                 for i in range(300):
                     if not self.is_running:
                         break
                     time.sleep(1)
                     
             except Exception as e:
-                self.log(f"❌ خطأ في حلقة التداول: {e}")
+                self.log(f"❌ خطأ في حلقة التداول: {str(e)}", "ERROR")
                 time.sleep(60)
-    
+
+    def execute_trade_signal(self, symbol, analysis):
+        """تنفيذ إشارة التداول"""
+        try:
+            if self.config.AUTO_EXECUTE and self.exchange:
+                # حساب حجم الصفقة
+                balance = self.exchange.fetch_balance()
+                usdt_balance = balance['total'].get('USDT', 0)
+                
+                if usdt_balance > 10:
+                    risk_amount = usdt_balance * (self.config.RISK_PERCENTAGE / 100)
+                    price = analysis['price']
+                    quantity = risk_amount / price
+                    
+                    # تنفيذ الشراء
+                    order = self.exchange.create_market_buy_order(symbol, quantity)
+                    
+                    # تسجيل الصفقة
+                    trade_info = {
+                        'symbol': symbol,
+                        'side': 'buy',
+                        'quantity': quantity,
+                        'price': price,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    self.trading_history.append(trade_info)
+                    
+                    self.log(f"✅ تم شراء {quantity:.6f} {symbol} بسعر ${price:.2f}", "TRADE")
+            
+            else:
+                self.log(f"💡 [محاكاة] إشارة شراء لـ {symbol} - السعر: ${analysis['price']:.2f}", "SIMULATION")
+                
+        except Exception as e:
+            self.log(f"❌ خطأ في تنفيذ الصفقة: {str(e)}", "ERROR")
+
     def start_trading(self):
-        """بدء التداول"""
+        """بدء التداول التلقائي"""
         if not self.is_running:
             self.is_running = True
             self.trading_thread = threading.Thread(target=self.trading_loop, daemon=True)
             self.trading_thread.start()
-            self.log("🎯 تم بدء التداول التلقائي")
             return True
         return False
-    
+
     def stop_trading(self):
-        """إيقاف التداول"""
+        """إيقاف التداول التلقائي"""
         self.is_running = False
-        self.log("⏹️ تم إيقاف التداول التلقائي")
+        self.log("⏹️ تم إيقاف التداول التلقائي", "SYSTEM")
+
+    def get_balance(self):
+        """جلب الرصيد"""
+        try:
+            if self.exchange:
+                balance = self.exchange.fetch_balance()
+                return {asset: amount for asset, amount in balance['total'].items() if amount > 0.00000001}
+            return {}
+        except Exception as e:
+            self.log(f"❌ خطأ في جلب الرصيد: {str(e)}", "ERROR")
+            return {}
 
     def update_config(self, new_config):
         """تحديث الإعدادات من واجهة الويب"""
@@ -291,47 +358,97 @@ class AITradingBot:
                     # تحويل القيم إلى الأنواع المناسبة
                     if key in ['AUTO_EXECUTE']:
                         value = value.lower() == 'true'
-                    elif key in ['RISK_PCT']:
+                    elif key in ['RISK_PERCENTAGE']:
                         value = float(value)
+                    elif key in ['TRADING_PAIRS']:
+                        value = value.split(',')
+                    
                     setattr(self.config, key, value)
             
             # إعادة تهيئة الاتصال إذا تم تغيير المفاتيح
             if 'BINANCE_API_KEY' in new_config or 'BINANCE_API_SECRET' in new_config:
                 self.setup_exchange()
             
-            self.log("✅ تم تحديث الإعدادات بنجاح")
+            self.log("✅ تم تحديث الإعدادات بنجاح", "SYSTEM")
             return True
         except Exception as e:
-            self.log(f"❌ خطأ في تحديث الإعدادات: {e}")
+            self.log(f"❌ خطأ في تحديث الإعدادات: {str(e)}", "ERROR")
             return False
 
 # إنشاء الكائن العالمي
-trading_bot = AITradingBot()
+trading_bot = AdvancedAITradingBot()
 
-# واجهة الويب
+# ========== واجهة الويب ==========
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html dir="rtl">
 <head>
     <meta charset="UTF-8">
     <title>🤖 AI Trading Bot - السحابة</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        body { font-family: Arial; margin: 0; padding: 20px; background: #0f1419; color: white; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .card { background: #1e2328; padding: 20px; margin: 10px 0; border-radius: 10px; border: 1px solid #333; }
-        .btn { background: #00d2d2; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background: #0f1419; 
+            color: white; 
+        }
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+        }
+        .card { 
+            background: #1e2328; 
+            padding: 20px; 
+            margin: 10px 0; 
+            border-radius: 10px; 
+            border: 1px solid #333; 
+        }
+        .btn { 
+            background: #00d2d2; 
+            color: white; 
+            border: none; 
+            padding: 10px 20px; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            margin: 5px; 
+        }
         .btn-danger { background: #ff4444; }
         .btn-success { background: #00c853; }
         .form-group { margin: 10px 0; }
-        input, select { width: 100%; padding: 8px; margin: 5px 0; background: #2a2e35; border: 1px solid #444; color: white; border-radius: 4px; }
-        .logs { background: black; color: #00ff00; padding: 15px; border-radius: 5px; height: 200px; overflow-y: scroll; font-family: monospace; }
+        input, select { 
+            width: 100%; 
+            padding: 8px; 
+            margin: 5px 0; 
+            background: #2a2e35; 
+            border: 1px solid #444; 
+            color: white; 
+            border-radius: 4px; 
+        }
+        .logs { 
+            background: black; 
+            color: #00ff00; 
+            padding: 15px; 
+            border-radius: 5px; 
+            height: 200px; 
+            overflow-y: scroll; 
+            font-family: monospace; 
+        }
         .status-running { color: #00ff00; }
         .status-stopped { color: #ff4444; }
+        .command-result { 
+            background: #2a2e35; 
+            padding: 15px; 
+            border-radius: 8px; 
+            margin-top: 10px; 
+            white-space: pre-line; 
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🤖 AI Trading Bot - التحكم الكامل</h1>
+        <h1>🤖 AI Trading Bot - السحابة</h1>
         
         <!-- بطاقة التحكم السريع -->
         <div class="card">
@@ -345,9 +462,18 @@ HTML_TEMPLATE = '''
         <!-- بطاقة الأوامر الصوتية -->
         <div class="card">
             <h3>🎤 الأوامر الصوتية/النصية</h3>
-            <input type="text" id="commandInput" placeholder="اكتب أمر مثل: 'ابحث عن BTC' أو 'شغل التداول'" style="width: 70%;">
+            <input type="text" id="commandInput" placeholder="اكتب أمر مثل: 'ابحث عن BTC' أو 'شغل التداول'">
             <button class="btn" onclick="sendCommand()">🚀 تنفيذ الأمر</button>
-            <div id="commandResult" style="margin-top: 10px; padding: 10px; background: #2a2e35; border-radius: 5px;"></div>
+            <div id="commandResult" class="command-result"></div>
+        </div>
+
+        <!-- بطاقة التحليل السريع -->
+        <div class="card">
+            <h3>📊 التحليل الفني السريع</h3>
+            <button class="btn" onclick="analyzeMarket('BTC/USDT')">تحليل BTC</button>
+            <button class="btn" onclick="analyzeMarket('ETH/USDT')">تحليل ETH</button>
+            <button class="btn" onclick="analyzeMarket('ADA/USDT')">تحليل ADA</button>
+            <div id="analysisResult" style="margin-top: 10px;"></div>
         </div>
 
         <!-- بطاقة الإعدادات -->
@@ -364,7 +490,7 @@ HTML_TEMPLATE = '''
                 </div>
                 <div class="form-group">
                     <label>نسبة المخاطرة %:</label>
-                    <input type="number" name="RISK_PCT" value="{{ config.RISK_PCT * 100 }}" step="0.1" min="0.1" max="10">
+                    <input type="number" name="RISK_PERCENTAGE" value="{{ config.RISK_PERCENTAGE }}" step="0.1" min="0.1" max="10">
                 </div>
                 <div class="form-group">
                     <label>التنفيذ التلقائي:</label>
@@ -372,6 +498,10 @@ HTML_TEMPLATE = '''
                         <option value="false" {% if not config.AUTO_EXECUTE %}selected{% endif %}>محاكاة</option>
                         <option value="true" {% if config.AUTO_EXECUTE %}selected{% endif %}>حقيقي</option>
                     </select>
+                </div>
+                <div class="form-group">
+                    <label>العملات للمراقبة:</label>
+                    <input type="text" name="TRADING_PAIRS" value="{{ config.TRADING_PAIRS | join(',') }}" placeholder="BTC/USDT,ETH/USDT,ADA/USDT">
                 </div>
                 <button type="submit" class="btn">💾 حفظ الإعدادات</button>
             </form>
@@ -416,20 +546,53 @@ HTML_TEMPLATE = '''
 
         function getBalance() {
             fetch('/balance').then(r => r.json()).then(data => {
-                alert('الرصيد: ' + JSON.stringify(data, null, 2));
+                if (Object.keys(data).length > 0) {
+                    let balanceText = '💰 الرصيد:\\n';
+                    for (const [asset, amount] of Object.entries(data)) {
+                        balanceText += `${asset}: ${parseFloat(amount).toFixed(8)}\\n`;
+                    }
+                    alert(balanceText);
+                } else {
+                    alert('❌ لا يوجد رصيد أو خطأ في الاتصال');
+                }
             });
         }
 
         // الأوامر الصوتية/النصية
         function sendCommand() {
             const command = document.getElementById('commandInput').value;
+            if (!command.trim()) return;
+            
             fetch('/command', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({command: command})
             }).then(r => r.json()).then(data => {
                 document.getElementById('commandResult').innerHTML = data.response.replace(/\\n/g, '<br>');
+                document.getElementById('commandInput').value = '';
             });
+        }
+
+        // تحليل السوق
+        function analyzeMarket(symbol) {
+            fetch('/analyze/' + encodeURIComponent(symbol))
+                .then(r => r.json())
+                .then(data => {
+                    const resultEl = document.getElementById('analysisResult');
+                    if (data.error) {
+                        resultEl.innerHTML = `<div style="color: #ff4444">${data.error}</div>`;
+                    } else {
+                        resultEl.innerHTML = `
+                            <div style="background: #2a2e35; padding: 15px; border-radius: 8px;">
+                                <strong>${data.symbol}</strong><br>
+                                السعر: $${data.price.toFixed(2)}<br>
+                                RSI: ${data.rsi}<br>
+                                الإشارة: ${data.signal}<br>
+                                الثقة: ${data.confidence}
+                            </div>
+                        `;
+                    }
+                });
         }
 
         // إرسال الإعدادات
@@ -438,17 +601,13 @@ HTML_TEMPLATE = '''
             const formData = new FormData(this);
             const data = Object.fromEntries(formData);
             
-            // تحويل RISK_PCT إلى decimal
-            if (data.RISK_PCT) {
-                data.RISK_PCT = parseFloat(data.RISK_PCT) / 100;
-            }
-            
             fetch('/config', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(data)
             }).then(r => r.json()).then(data => {
                 alert(data.message);
+                updateStatus();
             });
         });
 
@@ -459,6 +618,7 @@ HTML_TEMPLATE = '''
                 logsContainer.innerHTML = data.logs.map(log => 
                     `<div>${log}</div>`
                 ).join('');
+                logsContainer.scrollTop = logsContainer.scrollHeight;
             });
         }
 
@@ -466,10 +626,18 @@ HTML_TEMPLATE = '''
             fetch('/clear_logs', {method: 'POST'}).then(() => updateLogs());
         }
 
+        // السماح بالضغط على Enter في حقل الأوامر
+        document.getElementById('commandInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendCommand();
+            }
+        });
+
         // تحديث كل 5 ثواني
         setInterval(updateStatus, 5000);
         setInterval(updateLogs, 5000);
         updateStatus();
+        updateLogs();
     </script>
 </body>
 </html>
@@ -508,30 +676,13 @@ def process_command():
     response = trading_bot.process_command(command)
     return jsonify({"response": response})
 
+@app.route('/analyze/<path:symbol>')
+def analyze_symbol(symbol):
+    analysis = trading_bot.analyze_market(symbol)
+    return jsonify(analysis if analysis else {"error": "فشل التحليل"})
+
 @app.route('/config', methods=['POST'])
 def update_config():
     data = request.get_json()
     if trading_bot.update_config(data):
-        return jsonify({"message": "تم تحديث الإعدادات بنجاح"})
-    return jsonify({"message": "فشل تحديث الإعدادات"})
-
-@app.route('/logs')
-def get_logs():
-    return jsonify({"logs": trading_bot.user_commands[:50]})
-
-@app.route('/clear_logs', methods=['POST'])
-def clear_logs():
-    trading_bot.user_commands.clear()
-    return jsonify({"message": "تم مسح السجلات"})
-
-@app.route('/health')
-def health():
-    return jsonify({
-        "status": "healthy", 
-        "timestamp": datetime.now().isoformat(),
-        "version": "2.0"
-    })
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+        return jsonify({"message": "تم تحديث
